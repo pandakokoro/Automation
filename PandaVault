@@ -1,10 +1,10 @@
 import shutil
 from pathlib import Path
 
-# Directory to clean up
+# Target directory
 TARGET_DIR = Path.home() / "Downloads"
 
-# Category rules
+# Mapping extensions to category folders
 EXT_MAP = {
     "Images": [".jpg", ".jpeg", ".png", ".gif", ".webp", ".svg"],
     "Documents": [".pdf", ".docx", ".txt", ".xlsx", ".pptx", ".csv"],
@@ -13,20 +13,45 @@ EXT_MAP = {
     "Code": [".py", ".js", ".html", ".css", ".json", ".cpp"],
 }
 
+def get_unique_destination(dest_dir: Path, filename: str) -> Path:
+    """Generates a unique destination path if a collision exists."""
+    dest_file = dest_dir / filename
+    if not dest_file.exists():
+        return dest_file
+
+    stem = dest_file.stem
+    suffix = dest_file.suffix
+    counter = 1
+
+    while dest_file.exists():
+        dest_file = dest_dir / f"{stem}_{counter}{suffix}"
+        counter += 1
+
+    return dest_file
+
 def organize_folder(folder: Path):
-    for file in folder.iterdir():
-        if file.is_file() and not file.name.startswith("."):
-            ext = file.suffix.lower()
-            dest = folder / "Others"
-            
-            for category, exts in EXT_MAP.items():
-                if ext in exts:
-                    dest = folder / category
-                    break
-            
-            dest.mkdir(exist_ok=True)
-            shutil.move(str(file), str(dest / file.name))
-            print(f"Moved: {file.name} -> {dest.name}/")
+    if not folder.exists():
+        print(f"Directory {folder} does not exist.")
+        return
+
+    for item in folder.iterdir():
+        # Skip subdirectories and hidden files
+        if item.is_dir() or item.name.startswith("."):
+            continue
+
+        ext = item.suffix.lower()
+        category_dir = folder / "Others"
+
+        for category, exts in EXT_MAP.items():
+            if ext in exts:
+                category_dir = folder / category
+                break
+
+        category_dir.mkdir(exist_ok=True)
+        dest_path = get_unique_destination(category_dir, item.name)
+
+        shutil.move(str(item), str(dest_path))
+        print(f"Moved: {item.name} -> {category_dir.name}/{dest_path.name}")
 
 if __name__ == "__main__":
     organize_folder(TARGET_DIR)
