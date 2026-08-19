@@ -4,7 +4,7 @@ from pathlib import Path
 # Target directory
 TARGET_DIR = Path.home() / "Downloads"
 
-# Mapping extensions to category folders
+# Mapping extensions to category folders (kept lowercase for case-insensitivity)
 EXT_MAP = {
     "Images": [".jpg", ".jpeg", ".png", ".gif", ".webp", ".svg"],
     "Documents": [".pdf", ".docx", ".txt", ".xlsx", ".pptx", ".csv"],
@@ -14,7 +14,7 @@ EXT_MAP = {
 }
 
 def get_unique_destination(dest_dir: Path, filename: str) -> Path:
-    """Generates a unique destination path if a collision exists."""
+    """Generates a unique destination path if a file collision exists."""
     dest_file = dest_dir / filename
     if not dest_file.exists():
         return dest_file
@@ -39,18 +39,21 @@ def organize_folder(folder: Path):
         if item.is_dir() or item.name.startswith("."):
             continue
 
+        # Convert the file extension to lowercase to ignore case differences
         ext = item.suffix.lower()
         category_dir = folder / "Others"
 
         for category, exts in EXT_MAP.items():
-            if ext in exts:
+            # Ensures matching works regardless of whether EXT_MAP entries are uppercase or lowercase
+            if ext in [e.lower() for e in exts]:
                 category_dir = folder / category
                 break
 
         category_dir.mkdir(exist_ok=True)
         dest_path = get_unique_destination(category_dir, item.name)
 
-        shutil.move(str(item), str(dest_path))
+        # pathlib syntax for moving files
+        item.rename(dest_path)
         print(f"Moved: {item.name} -> {category_dir.name}/{dest_path.name}")
 
 if __name__ == "__main__":
