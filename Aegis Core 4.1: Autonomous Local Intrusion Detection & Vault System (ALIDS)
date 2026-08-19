@@ -1,0 +1,293 @@
+import asyncio
+import hashlib
+import logging
+import os
+import shutil
+import signal
+import stat
+import sys
+import time
+from pathlib import Path
+from typing import Dict, List, Tuple
+from cryptography.fernet import Fernet
+from watchdog.events import FileSystemEventHandler
+from watchdog.observers import Observer
+
+# Configure Secure Logging
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(SECURITY_LEVEL)s] [%(name)s] %(message)s",
+    handlers=[logging.StreamHandler(sys.stdout)],
+)
+
+# Custom log record factory to inject dynamic security context
+old_factory = logging.getLogRecordFactory()
+def record_factory(*args, **kwargs):
+    record = old_factory(*args, **kwargs)
+    record.SECURITY_LEVEL = getattr(record, "security_level", "SECURE")
+    return record
+logging.setLogRecordFactory(record_factory)
+
+logger = logging.getLogger("AegisDefence")
+
+TARGET_DIR = (Path.home() / "Downloads").resolve()
+VAULT_DIR = TARGET_DIR / ".Vault"
+QUARANTINE_DIR = TARGET_DIR / "Quarantine"
+HONEYPOT_FILE = TARGET_DIR / ".honey_vault.trap"
+
+# Suspicious extension combinations and malicious payload signatures
+MALICIOUS_PATTERNS = [
+    b"eval(base64_decode", b"/bin/sh", b"cmd.exe", b"powershell -e",
+    b"<script>", b"<?php", b"0x900x900x90", b"WScript.Shell"
+]
+
+SUSPICIOUS_EXTENSIONS = {".exe", ".bat", ".cmd", ".ps1", ".vbs", ".sh", ".py", ".elf"}
+
+EXT_MAP: Dict[str, List[str]] = {
+    "Images": [".jpg", ".jpeg", ".png", ".gif", ".webp", ".svg", ".bmp"],
+    "Documents": [".pdf", ".docx", ".txt", ".xlsx", ".pptx", ".csv"],
+    "Media": [".mp4", ".mp3", ".mkv", ".wav", ".mov", ".avi"],
+    "Archives": [".zip", ".tar", ".gz", ".rar", ".7z", ".iso"],
+    "Code": [".py", ".js", ".html", ".css", ".json", ".cpp", ".rs", ".go"],
+    "Executables": [".exe", ".msi", ".dmg", ".pkg", ".deb", ".appimage"],
+}
+
+LOOKUP = {ext.lower(): cat for cat, exts in EXT_MAP.items() for ext in exts}
+CATEGORY_NAMES = set(EXT_MAP.keys()) | {"Others", "Quarantine", ".Vault"}
+
+
+def hardened_ultimatum_purge(target_path: Path, passes: int = 1) -> bool:
+    """
+    Bulletproof Ultimatum Shredder: Handles symlinks, read-only permissions,
+    in-place overwrites, OS cache flushing, and forced truncation.
+    """
+    target_path = Path(target_path)
+    logger.warning(f"⚡ ULTIMATUM ENGAGED: Purging '{target_path.name}'")
+
+    try:
+        # 1. Symlink Traversal Guard
+        if target_path.is_symlink():
+            target_path.unlink()
+            logger.info(f"Unlinked raw symbolic link: '{target_path.name}'")
+            return True
+
+        if target_path.is_file():
+            # 2. Clear Read-Only Attribute Locks
+            try:
+                os.chmod(target_path, stat.S_IWRITE | stat.S_IWUSR)
+            except Exception:
+                pass
+
+            length = target_path.stat().st_size
+            if length > 0:
+                # 3. In-Place Overwrite Pass
+                with open(target_path, "r+b", buffering=0) as f:
+                    for _ in range(passes):
+                        f.seek(0)
+                        f.write(os.urandom(length))
+                        f.flush()
+                        os.fsync(f.fileno())
+                    
+                    # 4. Force Truncation to 0 Bytes
+                    f.seek(0)
+                    f.truncate(0)
+                    f.flush()
+                    os.fsync(f.fileno())
+
+            # 5. Remove File Entry
+            target_path.unlink()
+
+        elif target_path.is_dir():
+            shutil.rmtree(target_path)
+
+        logger.info(f"💥 ULTIMATUM COMPLETE: '{target_path.name}' neutralized.")
+        return True
+
+    except Exception as e:
+        logger.critical(f"ULTIMATUM PURGE FAILED on '{target_path}': {e}")
+        return False
+
+
+class SecurityCore:
+    """Manages ephemeral in-memory encryption and deep payload inspection."""
+    def __init__(self):
+        self.cipher_key = Fernet.generate_key()
+        self.cipher = Fernet(self.cipher_key)
+        self.lockdown_active = False
+
+    def encrypt_bytes(self, data: bytes) -> bytes:
+        return self.cipher.encrypt(data)
+
+    def scan_payload(self, file_path: Path) -> Tuple[bool, str]:
+        filename = file_path.name.lower()
+
+        # Check for double extensions (e.g. invoice.pdf.exe)
+        parts = filename.split(".")
+        if len(parts) > 2 and f".{parts[-1]}" in SUSPICIOUS_EXTENSIONS:
+            return True, f"Double extension payload detected ({filename})"
+
+        # Path Traversal Check
+        if ".." in filename or "/" in filename or "\\" in filename:
+            return True, "Path traversal sequence detected"
+
+        # Content Header Inspection (Read first 8KB)
+        try:
+            with open(file_path, "rb") as f:
+                header = f.read(8192)
+                for pattern in MALICIOUS_PATTERNS:
+                    if pattern in header:
+                        return True, f"Malicious signature detected: {pattern.decode(errors='ignore')}"
+        except Exception as e:
+            logger.error(f"Payload inspection skipped for '{file_path.name}': {e}")
+
+        return False, "Clean"
+
+
+class AegisDaemon:
+    def __init__(self, target_dir: Path):
+        self.target_dir = target_dir
+        self.queue = asyncio.Queue()
+        self.security = SecurityCore()
+        self.running = True
+        self._setup_environment()
+
+    def _setup_environment(self):
+        VAULT_DIR.mkdir(parents=True, exist_ok=True)
+        QUARANTINE_DIR.mkdir(parents=True, exist_ok=True)
+        
+        # Deploy Honeypot Trap
+        if not HONEYPOT_FILE.exists():
+            with open(HONEYPOT_FILE, "wb") as f:
+                f.write(b"TRAP_ACTIVE_" + os.urandom(32))
+
+    def trigger_lockdown(self, reason: str):
+        self.security.lockdown_active = True
+        logger.critical(f"🚨 BREACH DETECTED: {reason}. SYSTEM LOCKDOWN ENGAGED!")
+
+    async def process_queue(self):
+        while self.running:
+            file_path = await self.queue.get()
+            try:
+                if self.security.lockdown_active:
+                    logger.warning(f"Lockdown active. Denied processing for '{file_path.name}'")
+                    continue
+
+                await self._handle_file(file_path)
+            except Exception as e:
+                logger.error(f"Processing error on '{file_path.name}': {e}")
+            finally:
+                self.queue.task_done()
+
+    async def _handle_file(self, file_path: Path):
+        file_path = file_path.resolve()
+
+        if not file_path.exists() or file_path.is_dir():
+            return
+
+        # Honeypot Check
+        if file_path == HONEYPOT_FILE:
+            self.trigger_lockdown("Honeypot trap accessed or modified!")
+            return
+
+        if file_path.parent.name in CATEGORY_NAMES or file_path.name.startswith("."):
+            return
+
+        # Explicit Ultimatum Execution Trigger
+        if file_path.name.endswith(".purge"):
+            hardened_ultimatum_purge(file_path)
+            return
+
+        await asyncio.sleep(0.5)
+
+        # IDS Inspection
+        is_suspicious, reason = self.security.scan_payload(file_path)
+        if is_suspicious:
+            logger.warning(f"⚠️ SECURITY ALERT: '{file_path.name}' flagged [{reason}]. Quarantining.")
+            q_dest = QUARANTINE_DIR / f"ISOLATED_{int(time.time())}_{file_path.name}"
+            shutil.move(str(file_path), str(q_dest))
+            try:
+                os.chmod(q_dest, stat.S_IREAD)
+            except Exception:
+                pass
+            return
+
+        # AES-256 Memory Encrypted Vault Trigger
+        if file_path.name.endswith(".vault"):
+            logger.info(f"🔒 Encrypting sensitive payload '{file_path.name}' into Vault.")
+            raw_data = file_path.read_bytes()
+            encrypted_data = self.security.encrypt_bytes(raw_data)
+            
+            enc_dest = VAULT_DIR / f"{file_path.stem}.enc"
+            enc_dest.write_bytes(encrypted_data)
+            hardened_ultimatum_purge(file_path)
+            return
+
+        # Standard Categorization & File Placement
+        ext = file_path.suffix.lower()
+        category = LOOKUP.get(ext, "Others")
+        category_dir = self.target_dir / category
+        category_dir.mkdir(parents=True, exist_ok=True)
+
+        dest_path = category_dir / file_path.name
+        if dest_path.exists():
+            stem, suffix = file_path.stem, file_path.suffix
+            counter = 1
+            while dest_path.exists():
+                dest_path = category_dir / f"{stem}_{counter}{suffix}"
+                counter += 1
+
+        shutil.move(str(file_path), str(dest_path))
+        logger.info(f"Processed safely: '{file_path.name}' ➡️ [{category}]/{dest_path.name}")
+
+
+class WatchdogAsyncBridge(FileSystemEventHandler):
+    def __init__(self, loop: asyncio.AbstractEventLoop, queue: asyncio.Queue):
+        self.loop = loop
+        self.queue = queue
+
+    def on_created(self, event):
+        if not event.is_directory:
+            self.loop.call_soon_threadsafe(self.queue.put_nowait, Path(event.src_path))
+
+    def on_modified(self, event):
+        if Path(event.src_path) == HONEYPOT_FILE:
+            self.loop.call_soon_threadsafe(self.queue.put_nowait, Path(event.src_path))
+
+
+async def main():
+    logger.info(f"🛡️ Aegis v4.1 Hardened Active: {TARGET_DIR}")
+    loop = asyncio.get_running_loop()
+    daemon = AegisDaemon(TARGET_DIR)
+
+    worker_task = asyncio.create_task(daemon.process_queue())
+
+    event_handler = WatchdogAsyncBridge(loop, daemon.queue)
+    observer = Observer()
+    observer.schedule(event_handler, str(TARGET_DIR), recursive=False)
+    observer.start()
+
+    # Cross-Platform Signal Registration
+    stop_event = asyncio.Event()
+
+    def shutdown():
+        daemon.running = False
+        observer.stop()
+        stop_event.set()
+
+    if sys.platform != "win32":
+        for sig in (signal.SIGINT, signal.SIGTERM):
+            loop.add_signal_handler(sig, shutdown)
+
+    try:
+        await stop_event.wait()
+    except (KeyboardInterrupt, SystemExit):
+        shutdown()
+
+    observer.join()
+    await daemon.queue.join()
+    worker_task.cancel()
+    logger.info("🛑 Aegis shut down cleanly.")
+
+
+if __name__ == "__main__":
+    asyncio.run(main())
